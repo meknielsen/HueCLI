@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Local configuration (Contains your private App Key and IP)
+.hue-config.ini
+hue-config.ini
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
