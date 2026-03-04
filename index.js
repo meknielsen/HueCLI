@@ -108,6 +108,7 @@ program
 // 3. SHOW (Your new command)
 program
   .command('show')
+  .alias('s')
   .description('Show all mapped aliases for lights and rooms')
   .action(async () => {
     const config = await loadConfig();
@@ -129,6 +130,7 @@ program
 // 4. Toggle Command
 program
   .command('toggle <alias> <state>')
+  .alias('t')
   .description('Turn a light/room on or off')
   .action(async (alias, state) => {
     const config = await loadConfig();
@@ -144,6 +146,7 @@ program
 // 5. Dim Command
 program
   .command('dim <alias> <value>')
+  .alias('d')
   .description('Set brightness (0-100)')
   .action(async (alias, value) => {
     const config = await loadConfig();
@@ -159,6 +162,7 @@ program
 // 6. List (as a command)
 program
   .command('list <type>')
+  .alias('l')
   .description('List raw resources (light, room, zone)')
   .action(async (type) => {
     try {
@@ -170,6 +174,7 @@ program
 // 7. Blink (Identify)
 program
   .command('blink <alias>')
+  .alias('b')
   .description('Make a light flash so you can identify it')
   .action(async (alias) => {
     const config = await loadConfig();
