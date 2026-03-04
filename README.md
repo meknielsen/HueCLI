@@ -2,6 +2,13 @@
 
 A lightweight, professional-grade Command Line Interface (CLI) for controlling Philips Hue lights and rooms. Built with Node.js and `undici`, this tool is specifically designed to handle the **Hue V2 API** security requirements, including self-signed certificates and Server Name Indication (SNI) validation.
 
+## 🚀 Features
+* **Modern Hue V2 API**: Full support for SSL/TLS with SNI (Server Name Indication) using the Bridge ID.
+* **Smart Color Temperature**: Accepts values in **Mirek** (153-500) or **Kelvin** (e.g., `2700K`). 
+* **Auto-Clamping**: Automatically adjusts out-of-range values to the closest hardware limit.
+* **Global Configuration**: Config and aliases are stored in `~/.hue-config.ini`.
+* **Hardware Aware**: Validates if a light supports color temperature before sending commands to prevent errors.
+
 ---
 
 ## 🔍 Bridge Discovery
@@ -63,13 +70,26 @@ The configuration is stored globally in `~/.hue-config.ini`. This ensures your s
 
 ## 📖 Usage Guide
 
-| Command | Description | Example |
-| :--- | :--- | :--- |
-| `hue show` | Show all mapped aliases | `hue show` |
-| `hue toggle` | Turn a resource on/off | `hue toggle kitchen_table on` |
-| `hue dim` | Set brightness (0-100) | `hue dim office_desk 75` |
-| `hue blink` | Flash a light to identify it | `hue blink light_3` |
-| `hue list` | View raw API data | `hue list light` |
+| Command | Alias | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `status` | `st` | Table of current power, brightness, and temp | `hue st` |
+| `toggle` | `t` | Turn a resource on or off | `hue t office on` |
+| `dim` | `d` | Set brightness (0-100) | `hue d office 50` |
+| `temp` | `ct` | Set color (Mirek or Kelvin) | `hue ct kitchen 3000K` |
+| `blink` | `b` | Flash a light to identify it | `hue b desk_lamp` |
+| `show` | `s` | List all saved aliases and their IDs | `hue s` |
+| `map` | `m` | Refresh aliases from the Bridge | `hue m` |
+
+---
+
+### Detailed Temperature Usage
+The `temp` (or `ct`) command is context-aware. It handles the mathematical conversion between Kelvin and Mirek automatically:
+
+* **Mirek Input**: `hue ct office 153` (Coolest/Blue) to `500` (Warmest/Amber).
+* **Kelvin Input**: Append a **'K'** to the value. 
+  * Example: `hue ct office 2700K`
+  * Example: `hue ct office 6500K`
+
 
 ---
 

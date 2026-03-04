@@ -188,4 +188,106 @@ program
     } catch (err) { console.error(err.message); }
   });
 
+// --- 8. Color Temperature Command ---
+program
+  .command('temp <alias> <value>')
+  .alias('ct')
+  .description('Set color temperature in mirek (153-500) or Kelvin (2000K-6500K)')
+  .action(async (alias, value) => {
+    const config = await loadConfig();
+    const endpoint = config.resources[alias];
+    if (!endpoint) return console.error(`Alias "${alias}" not found.`);
+
+    let mirekValue;
+
+    // 1. Check if input is Kelvin (e.g., "3000K" or "3000k")
+    if (typeof value === 'string' && value.toLowerCase().endsWith('k')) {
+      const kelvin = parseInt(value);
+      if (isNaN(kelvin)) return console.error("Invalid Kelvin value. Example: 3000K");
+      
+      // Formula: Mirek = 1,000,000 / Kelvin
+      mirekValue = Math.round(1000000 / kelvin);
+      console.log(`Converted ${kelvin}K to ~${mirekValue} mirek.`);
+    } else {
+      mirekValue = parseInt(value);
+    }
+
+    // 2. Validate and Clamp Mirek values (Hue V2 Limits: 153 - 500)
+    if (mirekValue < 153) {
+      console.log(`⚠️  ${mirekValue} is too cool (blue). Using limit: 153 mirek (~6500K)`);
+      mirekValue = 153;
+    } else if (mirekValue > 500) {
+      console.log(`⚠️  ${mirekValue} is too warm (amber). Using limit: 500 mirek (~2000K)`);
+      mirekValue = 500;
+    }
+
+    try {
+      // 3. Pre-flight check for hardware support
+      const current = await hueRequest('GET', endpoint);
+      const deviceData = current.data[0];
+      
+      if (!deviceData || !deviceData.color_temperature) {
+        return console.error(`❌ Error: "${alias}" does not support color temperature (it may be a dim-only or on/off light).`);
+      }
+
+      // 4. Send Update
+      await hueRequest('PUT', endpoint, { color_temperature: { mirek: mirekValue } });
+      console.log(`✔ ${alias} updated to ${mirekValue} mirek.`);
+    } catch (err) {
+      console.error('Request failed:', err.message);
+    }
+  });
+
+// --- 9. Status Command ---
+program
+  .command('status')
+  .alias('st')
+  .description('Show the current state of all mapped resources')
+  .action(async () => {
+    const config = await loadConfig();
+    if (!config || !config.resources) return console.log("No resources mapped. Run 'hue map'.");
+
+    console.log("Fetching current status from Bridge...");
+
+    try {
+      // Fetch all lights and grouped_lights (rooms) in parallel
+      const [lights, grouped] = await Promise.all([
+        hueRequest('GET', 'light'),
+        hueRequest('GET', 'grouped_light')
+      ]);
+
+      // Combine data into a searchable map by ID
+      const allData = [...lights.data, ...grouped.data];
+      const statusTable = [];
+
+      for (const [alias, path] of Object.entries(config.resources)) {
+        const [type, id] = path.split('/');
+        const state = allData.find(item => item.id === id);
+
+        if (state) {
+          const isOn = state.on?.on ? 'ON' : 'off';
+          const bri = state.dimming ? `${Math.round(state.dimming.brightness)}%` : 'N/A';
+          
+          let temp = 'N/A';
+          if (state.color_temperature) {
+            const m = state.color_temperature.mirek;
+            const k = Math.round(1000000 / m);
+            temp = `${m} m (${k}K)`;
+          }
+
+          statusTable.push({
+            Alias: alias,
+            Power: isOn,
+            Brightness: bri,
+            'Temp (Mirek/K)': temp
+          });
+        }
+      }
+
+      console.table(statusTable);
+    } catch (err) {
+      console.error('Failed to fetch status:', err.message);
+    }
+  });
+
 program.parse();
