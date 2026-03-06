@@ -417,7 +417,7 @@ program
       }
 
       let currentBri = data.dimming.brightness;
-      const stepSize = 10; // Change by 10%
+      const stepSize = 20;  // Change by 20%
       let newBri;
 
       // 2. Calculate new value
@@ -434,6 +434,29 @@ program
       console.log(`🔅 ${alias} nudged ${direction} to ${newBri}%.`);
     } catch (err) {
       console.error('Step failed:', err.message);
+    }
+  });
+
+// JSON status output for Waybar (hue waybar-status <alias>)
+program
+  .command('status-json <alias>')
+  .action(async (alias) => {
+    try {
+      const config = await loadConfig();
+      const endpoint = config.resources[alias];
+      const data = await hueRequest('GET', endpoint);
+      const isOn = data.data[0].on.on;
+      
+      console.log(JSON.stringify({
+        // Change the icon itself based on status
+        text: isOn ? "󰛨" : "󰛩", 
+        alt: isOn ? "on" : "off",
+        class: isOn ? "on" : "off",
+        tooltip: `${alias} is ${isOn ? 'on' : 'off'}`
+      }));
+    } catch (err) {
+      // Use a "broken" bulb or warning icon for errors
+      console.log(JSON.stringify({ text: "󱧖", class: "error" }));
     }
   });
 
