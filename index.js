@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import { Agent, setGlobalDispatcher, fetch } from 'undici';
+import { Agent, fetch } from 'undici';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import ini from 'ini';
@@ -11,17 +11,6 @@ import os from 'node:os';
 const CONFIG_FILE = path.join(os.homedir(), '.hue-config.ini');
 
 // --- CORE UTILITIES ---
-
-async function setupDispatcher(config) {
-  const dispatcher = new Agent({
-    connect: {
-      ca: config.bridge.certificate,
-      rejectUnauthorized: true,
-      servername: config.bridge.id, 
-    }
-  });
-  setGlobalDispatcher(dispatcher);
-}
 
 async function loadConfig() {
   try {
@@ -34,18 +23,25 @@ async function loadConfig() {
 
 async function hueRequest(method, endpoint, body = null) {
   const config = await loadConfig();
-  if (!config) throw new Error("Config missing. Run 'hue configure' first.");
+  if (!config) throw new Error("Config missing.");
   
-  await setupDispatcher(config);
+  const dispatcher = new Agent({
+    connect: {
+      ca: config.bridge.certificate,
+      rejectUnauthorized: true,
+      // Force Uppercase for the SNI handshake
+      servername: config.bridge.id, 
+    }
+  });
 
   const url = `https://${config.bridge.ip}/clip/v2/resource/${endpoint}`;
   
   const response = await fetch(url, {
     method,
+    dispatcher,
     headers: {
       'Content-Type': 'application/json',
       'hue-application-key': config.bridge.appKey,
-      'Host': config.bridge.id,
     },
     body: body ? JSON.stringify(body) : null
   });
@@ -59,22 +55,106 @@ async function hueRequest(method, endpoint, body = null) {
 program
   .name('hue')
   .description('Professional Cross-platform Hue CLI')
-  .version('1.4.0');
+  .version('1.5.0');
 
-// 1. Configure
+// 1. DISCOVER (Complete Version)
+program
+  .command('discover')
+  .alias('disc')
+  .description('Automatically find Hue Bridge IP and ID via Cloud Discovery')
+  .action(async () => {
+    console.log('Searching for Hue Bridges...');
+    try {
+      const response = await fetch('https://discovery.meethue.com/');
+      const bridges = await response.json();
+
+      if (!bridges.length) return console.log('❌ No Hue Bridges found.');
+
+      const target = bridges[0];
+      let config = await loadConfig() || { bridge: {}, resources: {} };
+      
+      // CRITICAL: We force the ID to lowercase here. 
+      // The TLS SNI servername must be lowercase to match the Bridge's internal certificate logic.
+      config.bridge.ip = target.internalipaddress;
+      config.bridge.id = target.id.toLowerCase(); 
+
+      await fs.writeFile(CONFIG_FILE, ini.stringify(config));
+      console.log(`✅ Saved: IP ${config.bridge.ip}, ID ${config.bridge.id}`);
+    } catch (err) {
+      console.error('Discovery failed:', err.message);
+    }
+  });
+
+// 2. REGISTER (Generate App Key)
+program
+  .command('register')
+  .alias('reg')
+  .description('Generate a new Application Key (Press the Bridge button first!)')
+  .action(async () => {
+    const config = await loadConfig();
+    if (!config?.bridge?.ip) return console.log("Run 'hue discover' first.");
+
+    console.log('Press the big round button on your Bridge, then press Enter here.');
+    readline.question('>');
+
+    try {
+      // Registration often requires a relaxed dispatcher since we lack the Key
+      const regDispatcher = new Agent({ connect: { rejectUnauthorized: false } });
+      const url = `https://${config.bridge.ip}/api`;
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        dispatcher: regDispatcher,
+        body: JSON.stringify({
+          devicetype: `hue_cli#${os.hostname()}`,
+          generateclientkey: true
+        })
+      });
+
+      const data = await response.json();
+      if (data[0].error) throw new Error(data[0].error.description);
+
+      config.bridge.appKey = data[0].success.username;
+      await fs.writeFile(CONFIG_FILE, ini.stringify(config));
+      console.log(`✅ Key saved: ${config.bridge.appKey}`);
+    } catch (err) {
+      console.error('Registration failed:', err.message);
+    }
+  });
+
+// 3. CONFIGURE (Enhanced with Auto-Defaults)
 program
   .command('configure')
-  .description('Initial setup: IP, Bridge ID, Key, and Cert')
+  .description('Setup IP, ID, Key, and Certificate Path')
   .action(async () => {
-    const ip = readline.question('Enter Bridge IP: ');
-    const id = readline.question('Enter Bridge ID: ');
-    const appKey = readline.question('Enter Application Key: ', { hideEchoBack: true });
-    const certPath = readline.question('Path to huebridge_cacert.root.pem: ');
-    const certificate = await fs.readFile(path.resolve(certPath), 'utf-8');
+    const existing = await loadConfig() || { bridge: {}, resources: {} };
+    const b = existing.bridge;
 
-    const configData = { bridge: { ip, id, appKey, certificate }, resources: {} };
-    await fs.writeFile(CONFIG_FILE, ini.stringify(configData));
-    console.log(`Config saved to ${CONFIG_FILE}`);
+    if (readline.keyInYNStrict('Auto-discover Bridge IP and ID?')) {
+        const resp = await fetch('https://discovery.meethue.com/');
+        const bridges = await resp.json();
+        if (bridges?.[0]) {
+            b.ip = bridges[0].internalipaddress;
+            b.id = bridges[0].id;
+            console.log(`Found: ${b.ip}`);
+        }
+    }
+
+    b.ip = readline.question(`Bridge IP [${b.ip || ''}]: `, { defaultInput: b.ip });
+    b.id = readline.question(`Bridge ID [${b.id || ''}]: `, { defaultInput: b.id }).toLowerCase();
+    b.appKey = readline.question('App Key (hidden): ', { hideEchoBack: true, defaultInput: b.appKey });
+    
+    const cPath = b.certPath || '';
+    const newPath = readline.question(`Cert Path [${cPath}]: `, { defaultInput: cPath });
+
+    try {
+      const cert = await fs.readFile(path.resolve(newPath), 'utf-8');
+      existing.bridge = { ...b, certificate: cert, certPath: newPath };
+      await fs.writeFile(CONFIG_FILE, ini.stringify(existing));
+      console.log('✅ Config saved.');
+    } catch (e) {
+      console.error('Error reading cert:', e.message);
+    }
   });
 
 // 2. Map
@@ -129,18 +209,27 @@ program
 
 // 4. Toggle Command
 program
-  .command('toggle <alias> <state>')
+  .command('toggle <alias>')
   .alias('t')
-  .description('Turn a light/room on or off')
-  .action(async (alias, state) => {
+  .description('Flip a light or room to the opposite state')
+  .action(async (alias) => {
     const config = await loadConfig();
     const endpoint = config.resources[alias];
-    if (!endpoint) return console.error(`Alias "${alias}" not found.`);
+    if (!endpoint) return console.error(`❌ Alias "${alias}" not found.`);
 
     try {
-      const result = await hueRequest('PUT', endpoint, { on: { on: state === 'on' } });
-      console.log(`Toggled ${alias} ${state}.`);
-    } catch (err) { console.error(err.message); }
+      // 1. Fetch current status
+      const current = await hueRequest('GET', endpoint);
+      const isCurrentlyOn = current.data[0].on.on;
+
+      // 2. Send the opposite state
+      const newState = !isCurrentlyOn;
+      await hueRequest('PUT', endpoint, { on: { on: newState } });
+      
+      console.log(`💡 ${alias} toggled ${newState ? 'ON' : 'OFF'}.`);
+    } catch (err) {
+      console.error('Toggle failed:', err.message);
+    }
   });
 
 // 5. Dim Command
@@ -238,46 +327,64 @@ program
     }
   });
 
-// --- 9. Status Command ---
+// --- 9. Status Command (supports 'hue st', 'hue st <alias>', and 'hue st <alias> --short') ---
 program
-  .command('status')
+  .command('status [alias]')
   .alias('st')
-  .description('Show the current state of all mapped resources')
-  .action(async () => {
+  .description('Show current power, brightness, and temperature')
+  .option('-s, --short', 'Output only "on" or "off" for the given resource')
+  .action(async (alias, options) => {
     const config = await loadConfig();
     if (!config || !config.resources) return console.log("No resources mapped. Run 'hue map'.");
 
-    console.log("Fetching current status from Bridge...");
+    // Short mode requires an alias to be useful
+    if (options.short && !alias) {
+      return console.error("❌ Error: The --short option requires a specific <alias>.");
+    }
 
     try {
-      // Fetch all lights and grouped_lights (rooms) in parallel
       const [lights, grouped] = await Promise.all([
         hueRequest('GET', 'light'),
         hueRequest('GET', 'grouped_light')
       ]);
 
-      // Combine data into a searchable map by ID
       const allData = [...lights.data, ...grouped.data];
+      
+      // If alias is provided, check if it exists
+      if (alias && !config.resources[alias]) {
+        return console.error(`❌ Error: Alias "${alias}" not found.`);
+      }
+
+      const resourcesToCheck = alias 
+        ? [[alias, config.resources[alias]]]
+        : Object.entries(config.resources);
+
       const statusTable = [];
 
-      for (const [alias, path] of Object.entries(config.resources)) {
+      for (const [name, path] of resourcesToCheck) {
         const [type, id] = path.split('/');
         const state = allData.find(item => item.id === id);
 
         if (state) {
-          const isOn = state.on?.on ? 'ON' : 'off';
-          const bri = state.dimming ? `${Math.round(state.dimming.brightness)}%` : 'N/A';
+          const powerState = state.on?.on ? 'on' : 'off';
           
+          // --- SHORT OUTPUT LOGIC ---
+          if (options.short) {
+            console.log(powerState);
+            return; // Exit early since we only want the string
+          }
+
+          const bri = state.dimming ? `${Math.round(state.dimming.brightness)}%` : 'N/A';
           let temp = 'N/A';
           if (state.color_temperature) {
             const m = state.color_temperature.mirek;
             const k = Math.round(1000000 / m);
-            temp = `${m} m (${k}K)`;
+            temp = `${m}m (${k}K)`;
           }
 
           statusTable.push({
-            Alias: alias,
-            Power: isOn,
+            Alias: name,
+            Power: powerState.toUpperCase(),
             Brightness: bri,
             'Temp (Mirek/K)': temp
           });
@@ -290,4 +397,48 @@ program
     }
   });
 
+  // --- 10. Brightness Step Command ---
+program
+  .command('step <alias> <direction>')
+  .alias('sp')
+  .description('Nudge brightness up or down (e.g., hue step kontor up)')
+  .action(async (alias, direction) => {
+    const config = await loadConfig();
+    const endpoint = config.resources[alias];
+    if (!endpoint) return console.error(`❌ Alias "${alias}" not found.`);
+
+    try {
+      // 1. Get current brightness
+      const current = await hueRequest('GET', endpoint);
+      const data = current.data[0];
+      
+      if (!data.dimming) {
+        return console.error(`❌ ${alias} does not support dimming.`);
+      }
+
+      let currentBri = data.dimming.brightness;
+      const stepSize = 10; // Change by 10%
+      let newBri;
+
+      // 2. Calculate new value
+      if (direction.toLowerCase() === 'up') {
+        newBri = Math.min(currentBri + stepSize, 100);
+      } else if (direction.toLowerCase() === 'down') {
+        newBri = Math.max(currentBri - stepSize, 0);
+      } else {
+        return console.error("❌ Use 'up' or 'down' as the direction.");
+      }
+
+      // 3. Apply
+      await hueRequest('PUT', endpoint, { dimming: { brightness: newBri } });
+      console.log(`🔅 ${alias} nudged ${direction} to ${newBri}%.`);
+    } catch (err) {
+      console.error('Step failed:', err.message);
+    }
+  });
+
+
+
+
+ 
 program.parse();
