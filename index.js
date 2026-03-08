@@ -417,7 +417,7 @@ program
       }
 
       let currentBri = data.dimming.brightness;
-      const stepSize = 20;  // Change by 20%
+      const stepSize = 10;  // Change by 10%
       let newBri;
 
       // 2. Calculate new value
