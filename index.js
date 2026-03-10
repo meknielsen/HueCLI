@@ -459,9 +459,5 @@ program
       console.log(JSON.stringify({ text: "󱧖", class: "error" }));
     }
   });
-
-
-
-
  
 program.parse();
