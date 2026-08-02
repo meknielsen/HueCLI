@@ -11,7 +11,7 @@ A lightweight, professional-grade Command Line Interface (CLI) for controlling P
 
 ---
 
-## ⌕ Bridge Discovery ### test
+## 🔍 Bridge Discovery
 > **Note:** Automatic bridge discovery via N-UPnP or mDNS is currently in development. 
 > 
 > For now, please obtain your Bridge IP and Application Key manually. You can find your Bridge IP via your router's DHCP list or the official Hue App (Settings > Hue Bridges). To generate an `appKey`, refer to the official Hue Developer documentation.
